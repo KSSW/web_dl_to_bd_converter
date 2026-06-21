@@ -80,6 +80,10 @@ SEI_MASTERING_DISPLAY = 137
 SEI_CONTENT_LIGHT_LEVEL = 144
 SEI_ALT_TRANSFER_CHAR = 147
 
+# HDR10+ (SMPTE ST 2094 App 4) UUID
+# Format: itu_t_t35_country_code (0xB5) + provider_code (0x003C) + application_identifier
+HDR10PLUS_UUID = b'\xB5\x00\x3C\x00\x00\x01\x00\x04'
+
 FOUR_BYTE_SC = b'\x00\x00\x00\x01'
 
 # ============================================================
@@ -928,6 +932,7 @@ class HevcBlurayConverter:
         self.sps_info = None
         self.sei_mastering = None
         self.sei_content_light = None
+        self.sei_hdr10plus = None  # HDR10+ metadata (SMPTE ST 2094 App 4)
         self.sei_payloads_first_au = []  # Collected from first AU
         self.au_count = 0
         self.nal_count = 0
@@ -977,6 +982,11 @@ class HevcBlurayConverter:
                 self.sei_content_light = data
                 if self.verbose:
                     print(f"  Found Content Light Level SEI ({len(data)} bytes)")
+            elif pt == SEI_USER_DATA_REG:
+                # Preserve all SEI_USER_DATA_REG payloads (includes HDR10+)
+                self.sei_hdr10plus = data
+                if self.verbose:
+                    print(f"  Found SEI_USER_DATA_REG payload ({len(data)} bytes)")
 
     def _build_prefix_sei_payloads(self, is_first_au: bool) -> List[Tuple[int, bytes]]:
         """Build SEI payloads for prefix SEI NAL"""
@@ -993,6 +1003,10 @@ class HevcBlurayConverter:
         # Content Light Level (if available)
         if self.sei_content_light and is_first_au:
             payloads.append((SEI_CONTENT_LIGHT_LEVEL, self.sei_content_light))
+
+        # HDR10+ (if available)
+        if self.sei_hdr10plus and is_first_au:
+            payloads.append((SEI_USER_DATA_REG, self.sei_hdr10plus))
 
         return payloads
 
@@ -1189,11 +1203,14 @@ class HevcBlurayConverter:
             for pt, data in payloads:
                 # Keep: Mastering Display, Content Light Level, Buffering Period,
                 #        Pic Timing, Active Param Sets, Recovery Point, Time Code
-                # Remove: User Data Unregistered (x265 info), User Data Registered
-                if pt in (SEI_MASTERING_DISPLAY, SEI_CONTENT_LIGHT_LEVEL,
-                          SEI_BUFFERING_PERIOD, SEI_PIC_TIMING,
-                          SEI_ACTIVE_PARAM_SETS, SEI_RECOVERY_POINT,
-                          SEI_ALT_TRANSFER_CHAR, 136):  # 136 = time_code
+                #        User Data Registered (includes HDR10+)
+                # Remove: User Data Unregistered (x265 info)
+                keep_payload = pt in (SEI_MASTERING_DISPLAY, SEI_CONTENT_LIGHT_LEVEL,
+                                     SEI_BUFFERING_PERIOD, SEI_PIC_TIMING,
+                                     SEI_ACTIVE_PARAM_SETS, SEI_RECOVERY_POINT,
+                                     SEI_ALT_TRANSFER_CHAR, SEI_USER_DATA_REG, 136)  # 136 = time_code
+                
+                if keep_payload:
                     sei_payloads.append((pt, data))
 
         if sei_payloads:
